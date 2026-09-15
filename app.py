@@ -112,7 +112,7 @@ def generar_historico_y_proyeccion(
         else 0.02
     )
 
-    # 1. Histórico real
+    # 1. Histórico
     historico = brent_df.copy()
     historico["Precio_Combustible"] = historico["Precio_Brent"] * ratio
     historico["Tipo"] = "Histórico"
@@ -120,7 +120,7 @@ def generar_historico_y_proyeccion(
     ultima_fecha_dt = pd.to_datetime(historico["Fecha"].iloc[-1]).date()
     dias_futuro = (fecha_fin - ultima_fecha_dt).days
 
-    # 2. Proyección futura: PRECIO FIJO AL ÚLTIMO PRECIO ACTUAL
+    # 2. Proyección fija al precio actual
     if dias_futuro > 0:
         fechas_futuras = [
             pd.Timestamp(ultima_fecha_dt + timedelta(days=i))
@@ -130,8 +130,8 @@ def generar_historico_y_proyeccion(
         proyeccion = pd.DataFrame(
             {
                 "Fecha": fechas_futuras,
-                "Precio_Brent": brent_reciente,  # Se mantiene estable al valor actual
-                "Precio_Combustible": precio_actual,  # FIJO al último precio real
+                "Precio_Brent": brent_reciente,
+                "Precio_Combustible": precio_actual,
                 "Tipo": "Proyección",
             }
         )
@@ -151,7 +151,7 @@ def generar_historico_y_proyeccion(
 def obtener_coordenadas(direccion):
     if not direccion or len(direccion.strip()) < 3:
         return None
-    geolocator = Nominatim(user_agent="calculadora_combustible_app_v5")
+    geolocator = Nominatim(user_agent="calculadora_combustible_app_v6")
     try:
         query = (
             direccion
@@ -426,36 +426,53 @@ if st.button(
                 with tab2:
                     fig_precio_dual = make_subplots(specs=[[{"secondary_y": True}]])
 
+                    # 1. Combustible (€/L) -> Azul sólido y más grueso
                     fig_precio_dual.add_trace(
                         go.Scatter(
                             x=df_precios["Fecha"],
                             y=df_precios["Precio_Combustible"],
                             name=f"{tipo_combustible} (€/L)",
                             mode="lines",
-                            line=dict(color="blue"),
+                            line=dict(color="#0055ff", width=3),
                         ),
                         secondary_y=False,
                     )
 
+                    # 2. Petróleo Brent ($/Barril) -> Naranja discontinuo
                     fig_precio_dual.add_trace(
                         go.Scatter(
                             x=df_precios["Fecha"],
                             y=df_precios["Precio_Brent"],
                             name="Brent ($/Barril)",
                             mode="lines",
-                            line=dict(color="orange"),
+                            line=dict(color="#ff7f0e", width=2, dash="dash"),
                         ),
                         secondary_y=True,
                     )
+
+                    # Desacoplamiento de rangos visuales para evitar solapamiento 1:1
+                    min_comb = df_precios["Precio_Combustible"].min()
+                    max_comb = df_precios["Precio_Combustible"].max()
+                    min_brent = df_precios["Precio_Brent"].min()
+                    max_brent = df_precios["Precio_Brent"].max()
 
                     fig_precio_dual.update_layout(
                         title=f"Evolución del Precio: {tipo_combustible} vs Petróleo Brent",
                         hovermode="x unified",
                     )
-                    fig_precio_dual.update_yaxes(title_text=f"{tipo_combustible} (€/L)", secondary_y=False)
-                    fig_precio_dual.update_yaxes(title_text="Brent ($/Barril)", secondary_y=True)
+                    
+                    fig_precio_dual.update_yaxes(
+                        title_text=f"{tipo_combustible} (€/L)",
+                        secondary_y=False,
+                        range=[max(0.0, min_comb * 0.7), max_comb * 1.15],
+                    )
+                    
+                    fig_precio_dual.update_yaxes(
+                        title_text="Brent ($/Barril)",
+                        secondary_y=True,
+                        range=[max(0.0, min_brent * 0.85), max_brent * 1.3],
+                    )
 
-                    # Conversión explícita a formato String 'YYYY-MM-DD' para solucionar el TypeError
                     fig_precio_dual.add_vline(
                         x=hoy.strftime("%Y-%m-%d"),
                         line_dash="dash",
