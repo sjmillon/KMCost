@@ -14,7 +14,6 @@ st.set_page_config(page_title="Dashboard de Consumo y Precios", page_icon="⛽",
 
 @st.cache_data(ttl=3600)
 def obtener_precio_actual_combustibles(provincia_id="28"):
-    # Valores por defecto si la API del ministerio falla
     fallback = {'Gasolina 95': 1.62, 'Diésel': 1.51, 'Gasolina 98': 1.78, 'Diésel Premium': 1.60}
     url = f"https://sedeaplicaciones.minetur.gob.es/ServiciosRESTCarburantes/PreciosCarburantes/EstacionesTerrestres/FiltroProvincia/{provincia_id}"
     try:
@@ -43,23 +42,24 @@ def obtener_precio_actual_combustibles(provincia_id="28"):
 @st.cache_data(ttl=86400)
 def obtener_historico_brent(dias=365):
     try:
-        brent = yf.download("BZ=F", period=f"{dias}d")
-        if not brent.empty:
-            return brent['Close'].reset_index()
+        # Ticker.history garantiza una estructura plana y evita el error de MultiIndex
+        ticker = yf.Ticker("BZ=F")
+        hist = ticker.history(period=f"{dias}d")
+        if not hist.empty:
+            df = hist[['Close']].reset_index()
+            df.columns = ['Fecha', 'Precio_Brent']
+            df['Fecha'] = pd.to_datetime(df['Fecha']).dt.tz_localize(None)
+            return df
     except Exception:
         pass
     return pd.DataFrame()
 
 def generar_historico_y_proyeccion(brent_df, fecha_inicio, fecha_fin, tipo_combustible, precio_actual):
-    if brent_df.empty:
-        # Si falla Yahoo Finance, genera fechas base simuladas
-        fechas = pd.date_range(start=fecha_inicio, end=hoy)
+    if brent_df.empty or 'Precio_Brent' not in brent_df.columns:
+        fechas = pd.date_range(start=fecha_inicio, end=datetime.now().date())
         brent_df = pd.DataFrame({'Fecha': fechas, 'Precio_Brent': 75.0})
-    else:
-        brent_df.columns = ['Fecha', 'Precio_Brent']
-        brent_df['Fecha'] = pd.to_datetime(brent_df['Fecha']).dt.tz_localize(None)
     
-    brent_reciente = brent_df['Precio_Brent'].iloc[-1].item() if not brent_df.empty else 75.0
+    brent_reciente = float(brent_df['Precio_Brent'].iloc[-1]) if not brent_df.empty else 75.0
     ratio = precio_actual / brent_reciente if brent_reciente else 0.02
     
     historico = brent_df.copy()
@@ -71,7 +71,7 @@ def generar_historico_y_proyeccion(brent_df, fecha_inicio, fecha_fin, tipo_combu
     
     if dias_futuro > 0:
         fechas_futuras = [ultima_fecha + timedelta(days=i) for i in range(1, dias_futuro + 1)]
-        tendencia = (historico['Precio_Brent'].iloc[-1].item() - historico['Precio_Brent'].iloc[-30].item()) / 30 if len(historico) > 30 else 0
+        tendencia = (float(historico['Precio_Brent'].iloc[-1]) - float(historico['Precio_Brent'].iloc[-30])) / 30 if len(historico) > 30 else 0
         
         precios_futuros_brent = []
         precio_actual_brent = brent_reciente
@@ -124,8 +124,8 @@ brent_df = obtener_historico_brent(10)
 
 col1, col2, col3 = st.columns(3)
 if not brent_df.empty and len(brent_df) >= 2:
-    brent_hoy = brent_df['Close'].iloc[-1].item()
-    brent_ayer = brent_df['Close'].iloc[-2].item()
+    brent_hoy = float(brent_df['Precio_Brent'].iloc[-1])
+    brent_ayer = float(brent_df['Precio_Brent'].iloc[-2])
     diff_brent = brent_hoy - brent_ayer
     col1.metric("Petróleo Brent ($/barril)", f"${brent_hoy:.2f}", f"{diff_brent:.2f} $")
 else:
@@ -249,5 +249,4 @@ if st.button("📈 Generar Informe y Proyección", type="primary", use_container
                     )
                     fig_precio_dual.add_vline(x=hoy, line_dash="dash", line_color="green", annotation_text="Hoy")
                     st.plotly_chart(fig_precio_dual, use_container_width=True)
-                            
                    
