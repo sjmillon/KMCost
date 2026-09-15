@@ -68,16 +68,20 @@ def obtener_precio_actual_combustibles(provincia_id="28"):
 
 @st.cache_data(ttl=86400)
 def obtener_historico_brent(dias=365):
-    try:
-        ticker = yf.Ticker("BZ=F")
-        hist = ticker.history(period=f"{dias}d")
-        if not hist.empty and "Close" in hist.columns:
-            df = hist[["Close"]].reset_index()
-            df.columns = ["Fecha", "Precio_Brent"]
-            df["Fecha"] = pd.to_datetime(df["Fecha"]).dt.tz_localize(None)
-            return df
-    except Exception:
-        pass
+    # Consulta el ticker del petróleo Brent (BZ=F) y limpia picos de rollover de contratos
+    for symbol in ["BZ=F", "BRNT"]:
+        try:
+            ticker = yf.Ticker(symbol)
+            hist = ticker.history(period=f"{dias}d")
+            if not hist.empty and "Close" in hist.columns:
+                df = hist[["Close"]].reset_index()
+                df.columns = ["Fecha", "Precio_Brent"]
+                df["Fecha"] = pd.to_datetime(df["Fecha"]).dt.tz_localize(None)
+                # Acotado para evitar valores atípicos por ajustes de contrato
+                df["Precio_Brent"] = df["Precio_Brent"].clip(lower=40.0, upper=110.0)
+                return df
+        except Exception:
+            continue
     return pd.DataFrame()
 
 
@@ -151,7 +155,7 @@ def generar_historico_y_proyeccion(
 def obtener_coordenadas(direccion):
     if not direccion or len(direccion.strip()) < 3:
         return None
-    geolocator = Nominatim(user_agent="calculadora_combustible_app_v6")
+    geolocator = Nominatim(user_agent="calculadora_combustible_app_v7")
     try:
         query = (
             direccion
@@ -180,6 +184,25 @@ def calcular_ruta_osrm(lon1, lat1, lon2, lat2):
     except Exception:
         pass
     return None, None
+
+
+def calcular_desglose_impuestos(coste_total, litros_totales, tipo_combustible):
+    """
+    Calcula la estimación de impuestos en España:
+    - IVA: 21% sobre (Base + IEAH)
+    - Impuesto Especial sobre Hidrocarburos (IEAH): ~0.472 €/L (Gasolina) o ~0.379 €/L (Diésel)
+    """
+    iva = coste_total - (coste_total / 1.21)  # IVA 21%
+    
+    if "Diésel" in tipo_combustible:
+        ieah_por_litro = 0.379
+    else:
+        ieah_por_litro = 0.472
+        
+    ieah_total = min(litros_totales * ieah_por_litro, coste_total - iva)
+    base_materia_prima = max(0.0, coste_total - iva - ieah_total)
+    
+    return base_materia_prima, ieah_total, iva
 
 
 # --- 2. INTERFAZ DE USUARIO ---
@@ -405,28 +428,76 @@ if st.button(
                         secondary_y=True,
                     )
 
+                    # APILADO (barmode='stack') para que la altura de la barra muestre el TOTAL del mes
                     fig_gasto.update_layout(
-                        title="Gasto Total Mensual y Precio Medio del Brent",
+                        title="Gasto Total Mensual (Barras Apiladas = Total Mes) y Brent Medio",
                         hovermode="x unified",
-                        barmode="group",
+                        barmode="stack",
                     )
                     fig_gasto.update_yaxes(title_text="Gasto Total (€)", secondary_y=False)
                     fig_gasto.update_yaxes(title_text="Precio Brent Medio ($)", secondary_y=True)
 
                     st.plotly_chart(fig_gasto, use_container_width=True)
 
+                    # Totales del periodo
+                    df_periodo = df_precios[
+                        (df_precios["Fecha"].dt.date >= fecha_inicio)
+                        & (df_precios["Fecha"].dt.date <= fecha_fin)
+                    ]
+                    gasto_total_periodo = df_periodo["Gasto_Diario"].sum()
+                    litros_totales_periodo = (
+                        df_periodo[df_periodo["Es_Dia_Trabajo"]]["Litros_Diarios"].sum()
+                    )
+
                     gasto_futuro = df_precios[
                         (df_precios["Fecha"].dt.date >= hoy)
                         & (df_precios["Fecha"].dt.date <= fecha_fin)
                     ]["Gasto_Diario"].sum()
+
                     st.info(
-                        f"**Proyección:** Desde hoy hasta el {fecha_fin.strftime('%d/%m/%Y')}, se estima un gasto total de **{gasto_futuro:.2f} €**."
+                        f"**Resumen de gasto:** Gasto acumulado total en el periodo seleccionado: **{gasto_total_periodo:.2f} €** (Proyección restante desde hoy: **{gasto_futuro:.2f} €**)."
                     )
+
+                    # --- NUEVO DESGLOSE DE IMPUESTOS ---
+                    st.divider()
+                    st.subheader("🧾 Desglose Estimado del Gasto: Impuestos vs Carburante")
+                    
+                    base, ieah, iva = calcular_desglose_impuestos(
+                        gasto_total_periodo, litros_totales_periodo, tipo_combustible
+                    )
+
+                    col_d1, col_d2 = st.columns([1, 1])
+
+                    with col_d1:
+                        st.write(f"**Gasto Total Analizado:** {gasto_total_periodo:.2f} € ({litros_totales_periodo:.1f} Litros)")
+                        
+                        df_desglose = pd.DataFrame({
+                            "Concepto": ["Base Carburante y Margen", "Impuesto Hidrocarburos (IEAH)", "IVA (21%)"],
+                            "Importe (€)": [base, ieah, iva],
+                            "Porcentaje": [(base/gasto_total_periodo)*100 if gasto_total_periodo else 0,
+                                           (ieah/gasto_total_periodo)*100 if gasto_total_periodo else 0,
+                                           (iva/gasto_total_periodo)*100 if gasto_total_periodo else 0]
+                        })
+                        
+                        st.dataframe(
+                            df_desglose.style.format({"Importe (€)": "{:.2f} €", "Porcentaje": "{:.1f} %"}),
+                            use_container_width=True,
+                            hide_index=True
+                        )
+
+                    with col_d2:
+                        fig_pie = px.pie(
+                            df_desglose,
+                            values="Importe (€)",
+                            names="Concepto",
+                            title="Distribución del Coste Total",
+                            color_discrete_sequence=["#2ca02c", "#d62728", "#ff7f0e"]
+                        )
+                        st.plotly_chart(fig_pie, use_container_width=True)
 
                 with tab2:
                     fig_precio_dual = make_subplots(specs=[[{"secondary_y": True}]])
 
-                    # 1. Combustible (€/L) -> Azul sólido y más grueso
                     fig_precio_dual.add_trace(
                         go.Scatter(
                             x=df_precios["Fecha"],
@@ -438,7 +509,6 @@ if st.button(
                         secondary_y=False,
                     )
 
-                    # 2. Petróleo Brent ($/Barril) -> Naranja discontinuo
                     fig_precio_dual.add_trace(
                         go.Scatter(
                             x=df_precios["Fecha"],
@@ -450,7 +520,6 @@ if st.button(
                         secondary_y=True,
                     )
 
-                    # Desacoplamiento de rangos visuales para evitar solapamiento 1:1
                     min_comb = df_precios["Precio_Combustible"].min()
                     max_comb = df_precios["Precio_Combustible"].max()
                     min_brent = df_precios["Precio_Brent"].min()
