@@ -1,5 +1,3 @@
-Your ADEO chats aren’t used to improve our models. Gemini is AI and can make mistakes, including about people. Your privacy & GeminiOpens in a new window
-
 import streamlit as st
 import requests
 import pandas as pd
