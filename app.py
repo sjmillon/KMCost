@@ -112,6 +112,7 @@ def generar_historico_y_proyeccion(
         else 0.02
     )
 
+    # 1. Histórico real
     historico = brent_df.copy()
     historico["Precio_Combustible"] = historico["Precio_Brent"] * ratio
     historico["Tipo"] = "Histórico"
@@ -119,34 +120,18 @@ def generar_historico_y_proyeccion(
     ultima_fecha_dt = pd.to_datetime(historico["Fecha"].iloc[-1]).date()
     dias_futuro = (fecha_fin - ultima_fecha_dt).days
 
+    # 2. Proyección futura: PRECIO FIJO AL ÚLTIMO PRECIO ACTUAL
     if dias_futuro > 0:
         fechas_futuras = [
             pd.Timestamp(ultima_fecha_dt + timedelta(days=i))
             for i in range(1, dias_futuro + 1)
         ]
 
-        if len(historico) >= 30:
-            tendencia = (
-                float(historico["Precio_Brent"].iloc[-1])
-                - float(historico["Precio_Brent"].iloc[-30])
-            ) / 30.0
-        else:
-            tendencia = 0.0
-
-        precios_futuros_brent = []
-        precio_actual_brent = brent_reciente
-        for _ in range(dias_futuro):
-            variacion = random.uniform(-0.4, 0.4) + tendencia
-            precio_actual_brent = max(30.0, precio_actual_brent + variacion)
-            precios_futuros_brent.append(precio_actual_brent)
-
         proyeccion = pd.DataFrame(
             {
                 "Fecha": fechas_futuras,
-                "Precio_Brent": precios_futuros_brent,
-                "Precio_Combustible": [
-                    p * ratio for p in precios_futuros_brent
-                ],
+                "Precio_Brent": brent_reciente,  # Se mantiene estable al valor actual
+                "Precio_Combustible": precio_actual,  # FIJO al último precio real
                 "Tipo": "Proyección",
             }
         )
@@ -166,7 +151,7 @@ def generar_historico_y_proyeccion(
 def obtener_coordenadas(direccion):
     if not direccion or len(direccion.strip()) < 3:
         return None
-    geolocator = Nominatim(user_agent="calculadora_combustible_app_v4")
+    geolocator = Nominatim(user_agent="calculadora_combustible_app_v5")
     try:
         query = (
             direccion
@@ -368,19 +353,17 @@ if st.button(
                     * df_precios["Precio_Combustible"]
                 )
 
-                # Agrupación mensual fija usando el primer día del mes para orden numérico
                 df_mensual = (
                     df_precios.groupby(
                         [pd.Grouper(key="Fecha", freq="MS"), "Tipo"]
                     )
                     .agg(
                         Gasto_Mensual=("Gasto_Diario", "sum"),
-                        Brent_Medio=("Precio_Brent", "mean")
+                        Brent_Medio=("Precio_Brent", "mean"),
                     )
                     .reset_index()
                 )
 
-                # Crear etiqueta de texto limpia (Categoría) para evitar desfase de fechas en Plotly
                 df_mensual["Mes_Texto"] = df_mensual["Fecha"].dt.strftime("%b %Y")
 
                 st.subheader(
@@ -395,10 +378,8 @@ if st.button(
                 )
 
                 with tab1:
-                    # Crear figura de doble eje para barras de gasto + línea de Brent medio
                     fig_gasto = make_subplots(specs=[[{"secondary_y": True}]])
 
-                    # Añadir barras según el tipo (Histórico vs Proyección)
                     for tipo in df_mensual["Tipo"].unique():
                         df_sub = df_mensual[df_mensual["Tipo"] == tipo]
                         fig_gasto.add_trace(
@@ -411,7 +392,6 @@ if st.button(
                             secondary_y=False,
                         )
 
-                    # Agrupar Brent Medio por Mes_Texto para trazar la línea continua
                     df_brent_linea = df_mensual.groupby("Mes_Texto", sort=False)["Brent_Medio"].mean().reset_index()
 
                     fig_gasto.add_trace(
@@ -444,7 +424,6 @@ if st.button(
                     )
 
                 with tab2:
-                    # Gráfica dual usando la función nativa de subplots (evita ValueError)
                     fig_precio_dual = make_subplots(specs=[[{"secondary_y": True}]])
 
                     fig_precio_dual.add_trace(
@@ -476,11 +455,11 @@ if st.button(
                     fig_precio_dual.update_yaxes(title_text=f"{tipo_combustible} (€/L)", secondary_y=False)
                     fig_precio_dual.update_yaxes(title_text="Brent ($/Barril)", secondary_y=True)
 
+                    # Conversión explícita a formato String 'YYYY-MM-DD' para solucionar el TypeError
                     fig_precio_dual.add_vline(
-                        x=hoy,
+                        x=hoy.strftime("%Y-%m-%d"),
                         line_dash="dash",
                         line_color="green",
                         annotation_text="Hoy",
                     )
                     st.plotly_chart(fig_precio_dual, use_container_width=True)
-                   
