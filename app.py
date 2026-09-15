@@ -15,6 +15,21 @@ st.set_page_config(
     page_title="Dashboard de Consumo y Precios", page_icon="⛽", layout="wide"
 )
 
+# Diccionario oficial de provincias e identificadores INE
+PROVINCIAS = {
+    "Álava": "01", "Albacete": "02", "Alicante": "03", "Almería": "04", "Ávila": "05",
+    "Badajoz": "06", "Balears (Illes)": "07", "Barcelona": "08", "Burgos": "09", "Cáceres": "10",
+    "Cádiz": "11", "Castellón": "12", "Ciudad Real": "13", "Córdoba": "14", "A Coruña": "15",
+    "Cuenca": "16", "Girona": "17", "Granada": "18", "Guadalajara": "19", "Gipuzkoa": "20",
+    "Huelva": "21", "Huesca": "22", "Jaén": "23", "León": "24", "Lleida": "25",
+    "La Rioja": "26", "Lugo": "27", "Madrid": "28", "Málaga": "29", "Murcia": "30",
+    "Navarra": "31", "Ourense": "32", "Asturias": "33", "Palencia": "34", "Las Palmas": "35",
+    "Pontevedra": "36", "Salamanca": "37", "Santa Cruz de Tenerife": "38", "Cantabria": "39", "Segovia": "40",
+    "Sevilla": "41", "Soria": "42", "Tarragona": "43", "Teruel": "44", "Toledo": "45",
+    "Valencia": "46", "Valladolid": "47", "Bizkaia": "48", "Zamora": "49", "Zaragoza": "50",
+    "Ceuta": "51", "Melilla": "52"
+}
+
 # --- 1. FUNCIONES DE EXTRACCIÓN Y DATOS ---
 
 @st.cache_data(ttl=3600)
@@ -68,7 +83,6 @@ def obtener_precio_actual_combustibles(provincia_id="28"):
 
 @st.cache_data(ttl=86400)
 def obtener_historico_brent(dias=365):
-    # Consulta el ticker del petróleo Brent (BZ=F) y limpia picos de rollover de contratos
     for symbol in ["BZ=F", "BRNT"]:
         try:
             ticker = yf.Ticker(symbol)
@@ -77,7 +91,6 @@ def obtener_historico_brent(dias=365):
                 df = hist[["Close"]].reset_index()
                 df.columns = ["Fecha", "Precio_Brent"]
                 df["Fecha"] = pd.to_datetime(df["Fecha"]).dt.tz_localize(None)
-                # Acotado para evitar valores atípicos por ajustes de contrato
                 df["Precio_Brent"] = df["Precio_Brent"].clip(lower=40.0, upper=110.0)
                 return df
         except Exception:
@@ -116,7 +129,6 @@ def generar_historico_y_proyeccion(
         else 0.02
     )
 
-    # 1. Histórico
     historico = brent_df.copy()
     historico["Precio_Combustible"] = historico["Precio_Brent"] * ratio
     historico["Tipo"] = "Histórico"
@@ -124,7 +136,6 @@ def generar_historico_y_proyeccion(
     ultima_fecha_dt = pd.to_datetime(historico["Fecha"].iloc[-1]).date()
     dias_futuro = (fecha_fin - ultima_fecha_dt).days
 
-    # 2. Proyección fija al precio actual
     if dias_futuro > 0:
         fechas_futuras = [
             pd.Timestamp(ultima_fecha_dt + timedelta(days=i))
@@ -155,7 +166,7 @@ def generar_historico_y_proyeccion(
 def obtener_coordenadas(direccion):
     if not direccion or len(direccion.strip()) < 3:
         return None
-    geolocator = Nominatim(user_agent="calculadora_combustible_app_v7")
+    geolocator = Nominatim(user_agent="calculadora_combustible_app_v8")
     try:
         query = (
             direccion
@@ -187,12 +198,7 @@ def calcular_ruta_osrm(lon1, lat1, lon2, lat2):
 
 
 def calcular_desglose_impuestos(coste_total, litros_totales, tipo_combustible):
-    """
-    Calcula la estimación de impuestos en España:
-    - IVA: 21% sobre (Base + IEAH)
-    - Impuesto Especial sobre Hidrocarburos (IEAH): ~0.472 €/L (Gasolina) o ~0.379 €/L (Diésel)
-    """
-    iva = coste_total - (coste_total / 1.21)  # IVA 21%
+    iva = coste_total - (coste_total / 1.21)
     
     if "Diésel" in tipo_combustible:
         ieah_por_litro = 0.379
@@ -211,7 +217,17 @@ st.title("📊 Dashboard de Consumo y Proyección de Combustible")
 
 # Panel de Mercado
 st.header("1. Mercado Actual: Gasolina vs Brent")
-precios_actuales = obtener_precio_actual_combustibles()
+
+# Selector de Provincia
+lista_provincias = sorted(PROVINCIAS.keys())
+provincia_seleccionada = st.selectbox(
+    "📍 Selecciona la provincia de referencia para los precios:",
+    lista_provincias,
+    index=lista_provincias.index("Madrid")
+)
+provincia_id = PROVINCIAS[provincia_seleccionada]
+
+precios_actuales = obtener_precio_actual_combustibles(provincia_id)
 brent_df = obtener_historico_brent(10)
 
 col1, col2, col3 = st.columns(3)
@@ -230,11 +246,11 @@ else:
     col1.metric("Petróleo Brent ($/barril)", "$75.00", "0.00 $")
 
 col2.metric(
-    "Media Gasolina 95 (Madrid)",
+    f"Media Gasolina 95 ({provincia_seleccionada})",
     f"{precios_actuales.get('Gasolina 95', 1.62):.3f} €/L",
 )
 col3.metric(
-    "Media Diésel (Madrid)",
+    f"Media Diésel ({provincia_seleccionada})",
     f"{precios_actuales.get('Diésel', 1.51):.3f} €/L",
 )
 
@@ -428,7 +444,6 @@ if st.button(
                         secondary_y=True,
                     )
 
-                    # APILADO (barmode='stack') para que la altura de la barra muestre el TOTAL del mes
                     fig_gasto.update_layout(
                         title="Gasto Total Mensual (Barras Apiladas = Total Mes) y Brent Medio",
                         hovermode="x unified",
@@ -439,7 +454,6 @@ if st.button(
 
                     st.plotly_chart(fig_gasto, use_container_width=True)
 
-                    # Totales del periodo
                     df_periodo = df_precios[
                         (df_precios["Fecha"].dt.date >= fecha_inicio)
                         & (df_precios["Fecha"].dt.date <= fecha_fin)
@@ -458,7 +472,6 @@ if st.button(
                         f"**Resumen de gasto:** Gasto acumulado total en el periodo seleccionado: **{gasto_total_periodo:.2f} €** (Proyección restante desde hoy: **{gasto_futuro:.2f} €**)."
                     )
 
-                    # --- NUEVO DESGLOSE DE IMPUESTOS ---
                     st.divider()
                     st.subheader("🧾 Desglose Estimado del Gasto: Impuestos vs Carburante")
                     
@@ -549,3 +562,15 @@ if st.button(
                         annotation_text="Hoy",
                     )
                     st.plotly_chart(fig_precio_dual, use_container_width=True)
+
+# --- 3. PIE DE PÁGINA / FUENTES DE DATOS ---
+st.divider()
+st.markdown(
+    """
+    ### ℹ️ Origén y Fuentes de Datos
+    - **Precios de Carburantes:** Servicio REST público del *Ministerio para la Transición Ecológica y el Reto Demográfico* de España (actualización diaria de estaciones de servicio por provincia).
+    - **Cotización del Petróleo Brent:** Cotización oficial del barril de crudo Brent en tiempo real extraída del mercado bursátil internacional (*Yahoo Finance*, Ticker `BZ=F`).
+    - **Rutas y Distancias:** Cálculo vial ejecutado mediante la API *OSRM (Open Source Routing Machine)* sobre mapas abiertos.
+    - **Geocodificación de Direcciones:** Motor de geolocalización *Nominatim* de la plataforma colaborativa *OpenStreetMap*.
+    """
+)
