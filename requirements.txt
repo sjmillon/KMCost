@@ -1,2 +1,7 @@
 streamlit
 requests
+pandas
+plotly
+yfinance
+geopy
+python-dateutil
