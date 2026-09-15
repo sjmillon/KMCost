@@ -6,6 +6,7 @@ from geopy.geocoders import Nominatim
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import requests
 import streamlit as st
 import yfinance as yf
@@ -15,7 +16,6 @@ st.set_page_config(
 )
 
 # --- 1. FUNCIONES DE EXTRACCIÓN Y DATOS ---
-
 
 @st.cache_data(ttl=3600)
 def obtener_precio_actual_combustibles(provincia_id="28"):
@@ -41,9 +41,7 @@ def obtener_precio_actual_combustibles(provincia_id="28"):
             for est in estaciones:
                 if est.get("Precio Gasolina 95 E5"):
                     precios["Gasolina 95"].append(
-                        float(
-                            est["Precio Gasolina 95 E5"].replace(",", ".")
-                        )
+                        float(est["Precio Gasolina 95 E5"].replace(",", "."))
                     )
                 if est.get("Precio Gasoleo A"):
                     precios["Diésel"].append(
@@ -51,15 +49,11 @@ def obtener_precio_actual_combustibles(provincia_id="28"):
                     )
                 if est.get("Precio Gasolina 98 E5"):
                     precios["Gasolina 98"].append(
-                        float(
-                            est["Precio Gasolina 98 E5"].replace(",", ".")
-                        )
+                        float(est["Precio Gasolina 98 E5"].replace(",", "."))
                     )
                 if est.get("Precio Gasoleo Premium"):
                     precios["Diésel Premium"].append(
-                        float(
-                            est["Precio Gasoleo Premium"].replace(",", ".")
-                        )
+                        float(est["Precio Gasoleo Premium"].replace(",", "."))
                     )
 
             medias = {
@@ -92,7 +86,6 @@ def generar_historico_y_proyeccion(
 ):
     hoy_date = datetime.now().date()
 
-    # Garantizar presencia de datos
     if (
         brent_df.empty
         or "Fecha" not in brent_df.columns
@@ -102,9 +95,7 @@ def generar_historico_y_proyeccion(
         brent_df = pd.DataFrame({"Fecha": fechas, "Precio_Brent": 75.0})
     else:
         brent_df = brent_df.copy()
-        brent_df["Fecha"] = pd.to_datetime(brent_df["Fecha"]).dt.tz_localize(
-            None
-        )
+        brent_df["Fecha"] = pd.to_datetime(brent_df["Fecha"]).dt.tz_localize(None)
 
     brent_df["Precio_Brent"] = pd.to_numeric(
         brent_df["Precio_Brent"], errors="coerce"
@@ -125,7 +116,6 @@ def generar_historico_y_proyeccion(
     historico["Precio_Combustible"] = historico["Precio_Brent"] * ratio
     historico["Tipo"] = "Histórico"
 
-    # Conversión estricta a datetime.date para matemática limpia
     ultima_fecha_dt = pd.to_datetime(historico["Fecha"].iloc[-1]).date()
     dias_futuro = (fecha_fin - ultima_fecha_dt).days
 
@@ -176,7 +166,7 @@ def generar_historico_y_proyeccion(
 def obtener_coordenadas(direccion):
     if not direccion or len(direccion.strip()) < 3:
         return None
-    geolocator = Nominatim(user_agent="calculadora_combustible_app_v3")
+    geolocator = Nominatim(user_agent="calculadora_combustible_app_v4")
     try:
         query = (
             direccion
@@ -378,13 +368,20 @@ if st.button(
                     * df_precios["Precio_Combustible"]
                 )
 
+                # Agrupación mensual fija usando el primer día del mes para orden numérico
                 df_mensual = (
                     df_precios.groupby(
-                        [pd.Grouper(key="Fecha", freq="ME"), "Tipo"]
+                        [pd.Grouper(key="Fecha", freq="MS"), "Tipo"]
                     )
-                    .agg(Gasto_Mensual=("Gasto_Diario", "sum"))
+                    .agg(
+                        Gasto_Mensual=("Gasto_Diario", "sum"),
+                        Brent_Medio=("Precio_Brent", "mean")
+                    )
                     .reset_index()
                 )
+
+                # Crear etiqueta de texto limpia (Categoría) para evitar desfase de fechas en Plotly
+                df_mensual["Mes_Texto"] = df_mensual["Fecha"].dt.strftime("%b %Y")
 
                 st.subheader(
                     f"Resumen de Ruta: {distancia_km:.1f} km (Trayecto) | {distancia_diaria:.1f} km/día (Ida y Vuelta)"
@@ -398,18 +395,44 @@ if st.button(
                 )
 
                 with tab1:
-                    fig_gasto = px.bar(
-                        df_mensual,
-                        x="Fecha",
-                        y="Gasto_Mensual",
-                        color="Tipo",
-                        title="Gasto Total Mensual en Desplazamientos",
-                        labels={"Gasto_Mensual": "Gasto (€)", "Fecha": "Mes"},
-                        color_discrete_map={
-                            "Histórico": "#1f77b4",
-                            "Proyección": "#ff7f0e",
-                        },
+                    # Crear figura de doble eje para barras de gasto + línea de Brent medio
+                    fig_gasto = make_subplots(specs=[[{"secondary_y": True}]])
+
+                    # Añadir barras según el tipo (Histórico vs Proyección)
+                    for tipo in df_mensual["Tipo"].unique():
+                        df_sub = df_mensual[df_mensual["Tipo"] == tipo]
+                        fig_gasto.add_trace(
+                            go.Bar(
+                                x=df_sub["Mes_Texto"],
+                                y=df_sub["Gasto_Mensual"],
+                                name=f"Gasto ({tipo})",
+                                marker_color="#1f77b4" if tipo == "Histórico" else "#ff7f0e",
+                            ),
+                            secondary_y=False,
+                        )
+
+                    # Agrupar Brent Medio por Mes_Texto para trazar la línea continua
+                    df_brent_linea = df_mensual.groupby("Mes_Texto", sort=False)["Brent_Medio"].mean().reset_index()
+
+                    fig_gasto.add_trace(
+                        go.Scatter(
+                            x=df_brent_linea["Mes_Texto"],
+                            y=df_brent_linea["Brent_Medio"],
+                            name="Brent Medio ($/barril)",
+                            mode="lines+markers",
+                            line=dict(color="red", width=2.5),
+                        ),
+                        secondary_y=True,
                     )
+
+                    fig_gasto.update_layout(
+                        title="Gasto Total Mensual y Precio Medio del Brent",
+                        hovermode="x unified",
+                        barmode="group",
+                    )
+                    fig_gasto.update_yaxes(title_text="Gasto Total (€)", secondary_y=False)
+                    fig_gasto.update_yaxes(title_text="Precio Brent Medio ($)", secondary_y=True)
+
                     st.plotly_chart(fig_gasto, use_container_width=True)
 
                     gasto_futuro = df_precios[
@@ -421,7 +444,9 @@ if st.button(
                     )
 
                 with tab2:
-                    fig_precio_dual = go.Figure()
+                    # Gráfica dual usando la función nativa de subplots (evita ValueError)
+                    fig_precio_dual = make_subplots(specs=[[{"secondary_y": True}]])
+
                     fig_precio_dual.add_trace(
                         go.Scatter(
                             x=df_precios["Fecha"],
@@ -429,8 +454,10 @@ if st.button(
                             name=f"{tipo_combustible} (€/L)",
                             mode="lines",
                             line=dict(color="blue"),
-                        )
+                        ),
+                        secondary_y=False,
                     )
+
                     fig_precio_dual.add_trace(
                         go.Scatter(
                             x=df_precios["Fecha"],
@@ -438,26 +465,17 @@ if st.button(
                             name="Brent ($/Barril)",
                             mode="lines",
                             line=dict(color="orange"),
-                            yaxis="y2",
-                        )
+                        ),
+                        secondary_y=True,
                     )
 
                     fig_precio_dual.update_layout(
                         title=f"Evolución del Precio: {tipo_combustible} vs Petróleo Brent",
-                        yaxis=dict(
-                            title=f"{tipo_combustible} (€/L)",
-                            titlefont=dict(color="blue"),
-                            tickfont=dict(color="blue"),
-                        ),
-                        yaxis2=dict(
-                            title="Brent ($/Barril)",
-                            titlefont=dict(color="orange"),
-                            tickfont=dict(color="orange"),
-                            overlaying="y",
-                            side="right",
-                        ),
                         hovermode="x unified",
                     )
+                    fig_precio_dual.update_yaxes(title_text=f"{tipo_combustible} (€/L)", secondary_y=False)
+                    fig_precio_dual.update_yaxes(title_text="Brent ($/Barril)", secondary_y=True)
+
                     fig_precio_dual.add_vline(
                         x=hoy,
                         line_dash="dash",
