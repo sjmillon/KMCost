@@ -1,5 +1,9 @@
-import random
 from datetime import datetime, timedelta
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+import random
+import smtplib
+
 from dateutil.relativedelta import relativedelta
 import geopy
 from geopy.geocoders import Nominatim
@@ -39,6 +43,7 @@ def obtener_precio_actual_combustibles(provincia_id="28"):
         "Diésel": 1.51,
         "Gasolina 98": 1.78,
         "Diésel Premium": 1.60,
+        "Eléctrico": 0.20
     }
     url = f"https://sedeaplicaciones.minetur.gob.es/ServiciosRESTCarburantes/PreciosCarburantes/EstacionesTerrestres/FiltroProvincia/{provincia_id}"
     try:
@@ -75,6 +80,7 @@ def obtener_precio_actual_combustibles(provincia_id="28"):
                 k: (sum(v) / len(v) if v else fallback[k])
                 for k, v in precios.items()
             }
+            medias["Eléctrico"] = 0.20
             return medias
     except Exception:
         pass
@@ -166,7 +172,7 @@ def generar_historico_y_proyeccion(
 def obtener_coordenadas(direccion):
     if not direccion or len(direccion.strip()) < 3:
         return None
-    geolocator = Nominatim(user_agent="calculadora_combustible_app_v8")
+    geolocator = Nominatim(user_agent="calculadora_combustible_app_v9")
     try:
         query = (
             direccion
@@ -197,18 +203,103 @@ def calcular_ruta_osrm(lon1, lat1, lon2, lat2):
     return None, None
 
 
-def calcular_desglose_impuestos(coste_total, litros_totales, tipo_combustible):
-    iva = coste_total - (coste_total / 1.21)
-    
-    if "Diésel" in tipo_combustible:
-        ieah_por_litro = 0.379
+def calcular_desglose_impuestos(coste_total, consumo_total_unidades, tipo_combustible):
+    if tipo_combustible == "Eléctrico":
+        # IVA 21% e Impuesto Especial sobre la Electricidad (IEE ~5.11%)
+        iva = coste_total - (coste_total / 1.21)
+        base_mas_iee = coste_total / 1.21
+        iee = base_mas_iee - (base_mas_iee / 1.0511)
+        base_energia = max(0.0, base_mas_iee - iee)
+        return base_energia, iee, iva
     else:
-        ieah_por_litro = 0.472
-        
-    ieah_total = min(litros_totales * ieah_por_litro, coste_total - iva)
-    base_materia_prima = max(0.0, coste_total - iva - ieah_total)
+        iva = coste_total - (coste_total / 1.21)
+        if "Diésel" in tipo_combustible:
+            ieah_por_litro = 0.379
+        else:
+            ieah_por_litro = 0.472
+            
+        ieah_total = min(consumo_total_unidades * ieah_por_litro, coste_total - iva)
+        base_materia_prima = max(0.0, coste_total - iva - ieah_total)
+        return base_materia_prima, ieah_total, iva
+
+
+def enviar_informe_email(destinatario, resumen_dict):
+    smtp_server = st.secrets.get("SMTP_SERVER", "smtp.gmail.com")
+    smtp_port = int(st.secrets.get("SMTP_PORT", 587))
+    sender_email = st.secrets.get("SENDER_EMAIL", "")
+    sender_password = st.secrets.get("SENDER_PASSWORD", "")
+
+    if not sender_email or not sender_password:
+        return False, "Faltan credenciales SMTP. Configura SENDER_EMAIL y SENDER_PASSWORD en los Secrets de Streamlit."
+
+    asunto = "📊 Informe de Consumo y Proyección de Desplazamientos"
     
-    return base_materia_prima, ieah_total, iva
+    cuerpo_html = f"""
+    <html>
+      <body style="font-family: Arial, sans-serif; color: #333; line-height: 1.6;">
+        <h2 style="color: #1f77b4;">📊 Resumen de tu Informe de Desplazamientos</h2>
+        <hr style="border: 0; border-top: 1px solid #ccc;"/>
+        <h3>📍 Datos del Trayecto</h3>
+        <ul>
+          <li><b>Origen:</b> {resumen_dict['origen']}</li>
+          <li><b>Destino:</b> {resumen_dict['destino']}</li>
+          <li><b>Distancia por trayecto:</b> {resumen_dict['distancia_km']:.1f} km</li>
+          <li><b>Distancia diaria (ida y vuelta):</b> {resumen_dict['distancia_diaria']:.1f} km</li>
+          <li><b>Días de desplazamiento semanal:</b> {resumen_dict['dias_semana']} días</li>
+        </ul>
+
+        <h3>🚗 Vehículo y Consumo</h3>
+        <ul>
+          <li><b>Tipo de Energía/Combustible:</b> {resumen_dict['tipo_combustible']}</li>
+          <li><b>Consumo medio:</b> {resumen_dict['consumo']} {resumen_dict['unidad_consumo']}</li>
+          <li><b>Precio de referencia:</b> {resumen_dict['precio_ref']:.3f} {resumen_dict['unidad_precio']}</li>
+        </ul>
+
+        <h3>💰 Proyección de Costes</h3>
+        <div style="background-color: #f4f4f4; padding: 15px; border-radius: 5px;">
+          <p style="margin: 0;"><b>Gasto total acumulado en el periodo:</b> <span style="font-size: 18px; color: #d9534f;"><b>{resumen_dict['gasto_total']:.2f} €</b></span></p>
+          <p style="margin: 5px 0 0 0;"><b>Consumo total estimado:</b> {resumen_dict['consumo_total']:.1f} {resumen_dict['unidad_totales']}</p>
+        </div>
+
+        <h3>🧾 Desglose Estimado de Impuestos</h3>
+        <table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
+          <tr style="background-color: #eee;">
+            <th style="padding: 8px; border: 1px solid #ddd; text-align: left;">Concepto</th>
+            <th style="padding: 8px; border: 1px solid #ddd; text-align: right;">Importe</th>
+          </tr>
+          <tr>
+            <td style="padding: 8px; border: 1px solid #ddd;">Base Carburante / Energía</td>
+            <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">{resumen_dict['base']:.2f} €</td>
+          </tr>
+          <tr>
+            <td style="padding: 8px; border: 1px solid #ddd;">Impuesto Especial ({resumen_dict['nombre_impuesto']})</td>
+            <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">{resumen_dict['impuesto_esp']:.2f} €</td>
+          </tr>
+          <tr>
+            <td style="padding: 8px; border: 1px solid #ddd;">IVA (21%)</td>
+            <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">{resumen_dict['iva']:.2f} €</td>
+          </tr>
+        </table>
+        <br/>
+        <p style="font-size: 12px; color: #777;">Generado automáticamente desde <a href="https://kmcost.streamlit.app/">kmcost.streamlit.app</a></p>
+      </body>
+    </html>
+    """
+
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = asunto
+        msg["From"] = sender_email
+        msg["To"] = destinatario
+        msg.attach(MIMEText(cuerpo_html, "html"))
+
+        with smtplib.SMTP(smtp_server, smtp_port) as server:
+            server.starttls()
+            server.login(sender_email, sender_password)
+            server.sendmail(sender_email, destinatario, msg.as_string())
+        return True, "¡Informe enviado con éxito a tu correo electrónico!"
+    except Exception as e:
+        return False, f"No se pudo enviar el correo: {str(e)}"
 
 
 # --- 2. INTERFAZ DE USUARIO ---
@@ -218,7 +309,6 @@ st.title("📊 Dashboard de Consumo y Proyección de Combustible")
 # Panel de Mercado
 st.header("1. Mercado Actual: Gasolina vs Brent")
 
-# Selector de Provincia
 lista_provincias = sorted(PROVINCIAS.keys())
 provincia_seleccionada = st.selectbox(
     "📍 Selecciona la provincia de referencia para los precios:",
@@ -263,12 +353,22 @@ col_vehiculo, col_ruta = st.columns(2)
 with col_vehiculo:
     st.subheader("🚗 Vehículo")
     tipo_combustible = st.selectbox(
-        "Tipo de combustible",
-        ["Gasolina 95", "Diésel", "Gasolina 98", "Diésel Premium"],
+        "Tipo de combustible / Energía",
+        ["Gasolina 95", "Diésel", "Gasolina 98", "Diésel Premium", "Eléctrico"],
     )
-    consumo = st.number_input(
-        "Consumo medio (L/100km)", min_value=1.0, value=6.5, step=0.1
-    )
+
+    if tipo_combustible == "Eléctrico":
+        consumo = st.number_input(
+            "Consumo medio (kWh/100km)", min_value=1.0, value=18.0, step=0.5
+        )
+        precio_electrico_input = st.number_input(
+            "Precio estimado de recarga (€/kWh)", min_value=0.01, value=0.20, step=0.01
+        )
+        precios_actuales["Eléctrico"] = precio_electrico_input
+    else:
+        consumo = st.number_input(
+            "Consumo medio (L/100km)", min_value=1.0, value=6.5, step=0.1
+        )
 
 with col_ruta:
     st.subheader("🗺️ Ruta")
@@ -378,7 +478,7 @@ if st.button(
                     precio_actual,
                 )
 
-                df_precios["Litros_Diarios"] = (
+                df_precios["Unidades_Diarias"] = (
                     distancia_diaria / 100.0
                 ) * consumo
                 df_precios["Es_Dia_Trabajo"] = (
@@ -388,7 +488,7 @@ if st.button(
                 df_precios.loc[
                     df_precios["Es_Dia_Trabajo"], "Gasto_Diario"
                 ] = (
-                    df_precios["Litros_Diarios"]
+                    df_precios["Unidades_Diarias"]
                     * df_precios["Precio_Combustible"]
                 )
 
@@ -459,8 +559,8 @@ if st.button(
                         & (df_precios["Fecha"].dt.date <= fecha_fin)
                     ]
                     gasto_total_periodo = df_periodo["Gasto_Diario"].sum()
-                    litros_totales_periodo = (
-                        df_periodo[df_periodo["Es_Dia_Trabajo"]]["Litros_Diarios"].sum()
+                    unidades_totales_periodo = (
+                        df_periodo[df_periodo["Es_Dia_Trabajo"]]["Unidades_Diarias"].sum()
                     )
 
                     gasto_futuro = df_precios[
@@ -473,22 +573,25 @@ if st.button(
                     )
 
                     st.divider()
-                    st.subheader("🧾 Desglose Estimado del Gasto: Impuestos vs Carburante")
+                    st.subheader("🧾 Desglose Estimado del Gasto: Impuestos vs Energía")
                     
-                    base, ieah, iva = calcular_desglose_impuestos(
-                        gasto_total_periodo, litros_totales_periodo, tipo_combustible
+                    base, imp_esp, iva = calcular_desglose_impuestos(
+                        gasto_total_periodo, unidades_totales_periodo, tipo_combustible
                     )
 
                     col_d1, col_d2 = st.columns([1, 1])
+                    
+                    nombre_imp_esp = "Imp. Electricidad (IEE)" if tipo_combustible == "Eléctrico" else "Imp. Hidrocarburos (IEAH)"
+                    unidad_label = "kWh" if tipo_combustible == "Eléctrico" else "Litros"
 
                     with col_d1:
-                        st.write(f"**Gasto Total Analizado:** {gasto_total_periodo:.2f} € ({litros_totales_periodo:.1f} Litros)")
+                        st.write(f"**Gasto Total Analizado:** {gasto_total_periodo:.2f} € ({unidades_totales_periodo:.1f} {unidad_label})")
                         
                         df_desglose = pd.DataFrame({
-                            "Concepto": ["Base Carburante y Margen", "Impuesto Hidrocarburos (IEAH)", "IVA (21%)"],
-                            "Importe (€)": [base, ieah, iva],
+                            "Concepto": ["Base Energía / Carburante", nombre_imp_esp, "IVA (21%)"],
+                            "Importe (€)": [base, imp_esp, iva],
                             "Porcentaje": [(base/gasto_total_periodo)*100 if gasto_total_periodo else 0,
-                                           (ieah/gasto_total_periodo)*100 if gasto_total_periodo else 0,
+                                           (imp_esp/gasto_total_periodo)*100 if gasto_total_periodo else 0,
                                            (iva/gasto_total_periodo)*100 if gasto_total_periodo else 0]
                         })
                         
@@ -508,6 +611,43 @@ if st.button(
                         )
                         st.plotly_chart(fig_pie, use_container_width=True)
 
+                    # --- MÓDULO DE ENVÍO DE EMAIL ---
+                    st.divider()
+                    st.subheader("📧 Recibir Informe Detallado por Email")
+                    
+                    with st.form("form_email"):
+                        email_usuario = st.text_input("Introduce tu correo electrónico para recibir este informe:")
+                        submit_email = st.form_submit_button("Enviar Informe")
+
+                        if submit_email:
+                            if not email_usuario or "@" not in email_usuario:
+                                st.error("Por favor, introduce una dirección de correo válida.")
+                            else:
+                                resumen_data = {
+                                    "origen": origen_seleccionado.address,
+                                    "destino": destino_seleccionado.address,
+                                    "distancia_km": distancia_km,
+                                    "distancia_diaria": distancia_diaria,
+                                    "dias_semana": dias_por_semana,
+                                    "tipo_combustible": tipo_combustible,
+                                    "consumo": consumo,
+                                    "unidad_consumo": "kWh/100km" if tipo_combustible == "Eléctrico" else "L/100km",
+                                    "precio_ref": precio_actual,
+                                    "unidad_precio": "€/kWh" if tipo_combustible == "Eléctrico" else "€/L",
+                                    "gasto_total": gasto_total_periodo,
+                                    "consumo_total": unidades_totales_periodo,
+                                    "unidad_totales": "kWh" if tipo_combustible == "Eléctrico" else "Litros",
+                                    "base": base,
+                                    "impuesto_esp": imp_esp,
+                                    "nombre_impuesto": nombre_imp_esp,
+                                    "iva": iva
+                                }
+                                ok, msg = enviar_informe_email(email_usuario, resumen_data)
+                                if ok:
+                                    st.success(msg)
+                                else:
+                                    st.warning(msg)
+
                 with tab2:
                     fig_precio_dual = make_subplots(specs=[[{"secondary_y": True}]])
 
@@ -515,7 +655,7 @@ if st.button(
                         go.Scatter(
                             x=df_precios["Fecha"],
                             y=df_precios["Precio_Combustible"],
-                            name=f"{tipo_combustible} (€/L)",
+                            name=f"{tipo_combustible} (€/{'kWh' if tipo_combustible == 'Eléctrico' else 'L'})",
                             mode="lines",
                             line=dict(color="#0055ff", width=3),
                         ),
@@ -544,7 +684,7 @@ if st.button(
                     )
                     
                     fig_precio_dual.update_yaxes(
-                        title_text=f"{tipo_combustible} (€/L)",
+                        title_text=f"{tipo_combustible}",
                         secondary_y=False,
                         range=[max(0.0, min_comb * 0.7), max_comb * 1.15],
                     )
@@ -567,8 +707,8 @@ if st.button(
 st.divider()
 st.markdown(
     """
-    ### ℹ️ Origén y Fuentes de Datos
-    - **Precios de Carburantes:** Servicio REST público del *Ministerio para la Transición Ecológica y el Reto Demográfico* de España (actualización diaria de estaciones de servicio por provincia).
+    ### ℹ️ Origen y Fuentes de Datos
+    - **Precios de Carburantes y Luz:** Servicio REST público del *Ministerio para la Transición Ecológica y el Reto Demográfico* de España y referencia de tarifas medias de recarga.
     - **Cotización del Petróleo Brent:** Cotización oficial del barril de crudo Brent en tiempo real extraída del mercado bursátil internacional (*Yahoo Finance*, Ticker `BZ=F`).
     - **Rutas y Distancias:** Cálculo vial ejecutado mediante la API *OSRM (Open Source Routing Machine)* sobre mapas abiertos.
     - **Geocodificación de Direcciones:** Motor de geolocalización *Nominatim* de la plataforma colaborativa *OpenStreetMap*.
