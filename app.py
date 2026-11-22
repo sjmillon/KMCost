@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 import html
+import importlib
 import os
 import smtplib
 import sys
@@ -22,9 +23,27 @@ from streamlit_folium import st_folium
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from kmcost import data, planner  # noqa: E402
-from kmcost.costs import desglose_impuestos, euros, num  # noqa: E402
-from kmcost.vehicles import TIPOS_LABEL, VEHICULOS  # noqa: E402
+
+def _importar_kmcost():
+    """Recarga submódulos si cambiaron en disco (Streamlit Cloud mantiene sys.modules tras git pull)."""
+    import kmcost.costs
+    import kmcost.data
+    import kmcost.geo
+    import kmcost.net
+    import kmcost.planner
+    import kmcost.vehicles
+
+    for mod in (kmcost.net, kmcost.geo, kmcost.costs, kmcost.vehicles, kmcost.planner, kmcost.data):
+        mtime = os.path.getmtime(mod.__file__)
+        if getattr(mod, "_kmcost_mtime", None) != mtime:
+            importlib.reload(mod)
+            mod._kmcost_mtime = os.path.getmtime(mod.__file__)
+    return kmcost.data, kmcost.planner, kmcost.costs, kmcost.vehicles
+
+
+data, planner, _costs, _vehicles = _importar_kmcost()
+desglose_impuestos, euros, num = _costs.desglose_impuestos, _costs.euros, _costs.num
+TIPOS_LABEL, VEHICULOS = _vehicles.TIPOS_LABEL, _vehicles.VEHICULOS
 
 st.set_page_config(page_title="KMCost · Combustible, viajes y recarga", page_icon="⛽",
                    layout="wide", initial_sidebar_state="collapsed")
