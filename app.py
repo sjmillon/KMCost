@@ -144,6 +144,4 @@ def panel_vehiculo(prefijo):
     v["modelo"] = modelo
     return v
 
-# ... (el resto del archivo completo con las correcciones está en el commit)
-# Las llamadas usan planner.puntos_en_ruta(estaciones, ruta, desvio, columna_precio=col)
-print('Versión corregida subida.')
+# CONTINUARÁ EN EL SIGUIENTE COMMIT
