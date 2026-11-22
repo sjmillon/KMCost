@@ -1,0 +1,52 @@
+name: Actualizar instantánea de precios y cargadores
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: snapshot-data
+  cancel-in-progress: true
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar código de main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar requests
+        run: pip install --no-cache-dir "requests>=2.31,<3"
+
+      - name: Recuperar instantánea previa si existe
+        run: |
+          mkdir -p /tmp/snapshot
+          if git fetch origin data --depth=1 2>/dev/null; then
+            git archive FETCH_HEAD | tar -x -C /tmp/snapshot
+          fi
+
+      - name: Descargar datos de MITECO, REE y DGT
+        run: python scripts/actualizar_snapshot.py /tmp/snapshot
+
+      - name: Publicar en la rama data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout --orphan data-tmp
+          git rm -rf . >/dev/null 2>&1 || true
+          cp /tmp/snapshot/* .
+          git add estaciones.json.gz pvpc.json cargadores.json.gz meta.json
+          FECHA=$(python -c "import json; d=json.load(open('meta.json')); print(d.get('actualizado_madrid',''))")
+          git commit -m "Snapshot ${FECHA} (hora Madrid)"
+          git push --force origin data-tmp:refs/heads/data
