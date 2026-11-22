@@ -61,3 +61,31 @@ def test_multiples_paradas_y_marca():
 def test_inalcanzable():
     p = planner.planificar_paradas(_cands(), 700, 30, 300, columna_precio="precio")
     assert not p["llega"] and p["avisos"]
+
+
+def test_legacy_tls_adapter():
+    from kmcost.net import crear_sesion
+
+    s = crear_sesion(legacy=True, sec_level_1=True, max_tls12=True)
+    assert "https://" in s.adapters
+
+
+def test_parseo_y_actualizacion_provincial(monkeypatch):
+    from kmcost import data
+
+    base = data._parsear_miteco([{
+        "IDEESS": "1", "Rótulo": "CEPSA", "Dirección": "A", "Municipio": "Madrid",
+        "Localidad": "Madrid", "Provincia": "MADRID", "IDProvincia": "28", "C.P.": "28001",
+        "Horario": "L-D: 24H", "Margen": "D", "Tipo Venta": "P",
+        "Latitud": "40,4", "Longitud (WGS84)": "-3,7", "Precio Gasoleo A": "1,700",
+    }])
+    nueva = data._parsear_miteco([{
+        "IDEESS": "1", "Rótulo": "CEPSA", "Dirección": "A", "Municipio": "Madrid",
+        "Localidad": "Madrid", "Provincia": "MADRID", "IDProvincia": "28", "C.P.": "28001",
+        "Horario": "L-D: 24H", "Margen": "D", "Tipo Venta": "P",
+        "Latitud": "40,4", "Longitud (WGS84)": "-3,7", "Precio Gasoleo A": "1,650",
+    }])
+    monkeypatch.setattr(data, "_descargar_provincia", lambda pid: (nueva, "22/11/2026 14:00"))
+    act, fecha, n = data.actualizar_provincias(base, ["28"])
+    assert n == 1 and fecha == "22/11/2026 14:00"
+    assert float(act.iloc[0]["Diésel"]) == 1.650

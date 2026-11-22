@@ -289,10 +289,11 @@ def precio_luz_panel(prefijo):
     if pv["error"]:
         st.caption(f"⚠️ {pv['error']}")
     else:
+        etq = "en directo" if pv.get("origen") == "directo" else "instantánea automática"
         st.caption(
-            f"PVPC hoy ({pv['fecha']}, {pv['fuente']}): media {num(pv['media'], 3)} €/kWh sin impuestos "
-            f"(mín. {num(pv['min'], 3)}, máx. {num(pv['max'], 3)}; ahora {num(pv['actual'], 3)}). "
-            f"Con impuestos: {num(casa_media, 3)} €/kWh.")
+            f"PVPC hoy ({pv['fecha']}, {pv['fuente']}, {etq}): media {num(pv['media'], 3)} €/kWh sin "
+            f"impuestos (mín. {num(pv['min'], 3)}, máx. {num(pv['max'], 3)}; ahora "
+            f"{num(pv['actual'], 3)}). Con impuestos: {num(casa_media, 3)} €/kWh.")
     return p_casa, p_pub
 
 
@@ -337,12 +338,18 @@ modo = st.radio("Modo", ["🧭 Viajar", "🏠 Casa-trabajo"], horizontal=True, l
                 key="modo")
 
 with st.spinner("Cargando precios oficiales de carburantes…"):
-    estaciones, fecha_precios, error_precios = data.cargar_estaciones()
+    estaciones, fecha_precios, origen_precios, error_precios = data.cargar_estaciones()
 if error_precios:
     st.error(error_precios + " Vuelve a intentarlo en unos minutos.")
 else:
-    st.caption(f"🕒 Precios oficiales del Ministerio (MITECO): **{fecha_precios}** (hora peninsular) · "
-               f"{len(estaciones):,} estaciones · se actualizan cada ~45 min.".replace(",", "."))
+    etq_origen = (
+        "en directo" if origen_precios == "directo"
+        else "instantánea automática de respaldo (el servidor directo del Ministerio no respondió)"
+    )
+    st.caption(
+        f"🕒 Precios oficiales del Ministerio (MITECO): **{fecha_precios}** (hora peninsular) · "
+        f"{etq_origen} · {len(estaciones):,} estaciones.".replace(",", ".")
+    )
 
 
 # ============================================================ MODO VIAJAR
@@ -424,6 +431,12 @@ def modo_viajar():
     if usa_combustible and not estaciones.empty:
         col = veh["combustible"]
         cands = planner.puntos_en_ruta(estaciones, ruta, desvio, columna_precio=col)
+        if origen_precios == "snapshot" and not cands.empty:
+            provs_ruta = cands["id_provincia"].dropna().unique().tolist()
+            est_act, f_prov, n_prov = data.actualizar_provincias(estaciones, provs_ruta)
+            if n_prov:
+                cands = planner.puntos_en_ruta(est_act, ruta, desvio, columna_precio=col)
+                st.caption(f"🔄 Precios de la ruta actualizados en directo ({n_prov} provincias · {f_prov}).")
         if solo24 and not cands.empty:
             cands = cands[cands["24h"]]
     if tipo == "phev":
@@ -680,6 +693,11 @@ def modo_casa_trabajo():
     prov = st.selectbox("Provincia de referencia para la media de precios", provs,
                         index=provs.index("Madrid"), key="ct_prov")
     id_prov = data.PROVINCIAS[prov]
+    est_ct = estaciones
+    if origen_precios == "snapshot" and not estaciones.empty:
+        est_ct, f_prov, n_prov = data.actualizar_provincias(estaciones, [id_prov])
+        if n_prov:
+            st.caption(f"🔄 Precios de {prov} actualizados en directo ({f_prov}).")
     brent = data.historico_brent(10)
     c1, c2, c3 = st.columns(3)
     if len(brent) >= 2:
@@ -687,8 +705,8 @@ def modo_casa_trabajo():
                   f"{num(brent['Precio_Brent'].iloc[-1] - brent['Precio_Brent'].iloc[-2], 2)} $")
     else:
         c1.metric("Petróleo Brent ($/barril)", "s/d")
-    g95 = data.media_provincial(estaciones, id_prov, "Gasolina 95")
-    dsl = data.media_provincial(estaciones, id_prov, "Diésel")
+    g95 = data.media_provincial(est_ct, id_prov, "Gasolina 95")
+    dsl = data.media_provincial(est_ct, id_prov, "Diésel")
     c2.metric(f"Media gasolina 95 ({prov})", f"{num(g95, 3)} €/L" if g95 else "s/d")
     c3.metric(f"Media diésel ({prov})", f"{num(dsl, 3)} €/L" if dsl else "s/d")
 
@@ -745,9 +763,9 @@ def modo_casa_trabajo():
         consumo, unidad, etiqueta = veh["consumo_kwh"], "kWh", "Eléctrico"
     else:
         col = veh["combustible"]
-        media = data.media_provincial(estaciones, id_prov, col)
-        if not estaciones.empty:
-            cercanas = planner.puntos_en_ruta(estaciones, ruta, desvio, columna_precio=col)
+        media = data.media_provincial(est_ct, id_prov, col)
+        if not est_ct.empty:
+            cercanas = planner.puntos_en_ruta(est_ct, ruta, desvio, columna_precio=col)
         opciones = []
         if not cercanas.empty:
             top = cercanas.nsmallest(30, col)
@@ -896,6 +914,8 @@ st.markdown(
 (MITECO)*, actualizado cada ~30 min · Rutas: *OSRM* sobre OpenStreetMap · Direcciones: *Nominatim* y
 *Photon* (OpenStreetMap) · Luz: *PVPC 2.0TD* de *Red Eléctrica* (REData) · Puntos de carga: inventario
 oficial *MITERD/DGT* (Punto de Acceso Nacional), *OpenStreetMap* (Overpass) y, si se configura,
-*OpenChargeMap* · Brent: *Yahoo Finance* (`BZ=F`). Los consumos son de referencia: ajústalos a tu coche.
+*OpenChargeMap* · Brent: *Yahoo Finance* (`BZ=F`). Cuando un servidor oficial falla o bloquea
+peticiones desde la nube, la app usa automáticamente una instantánea actualizada cada 30 min. Los
+consumos son de referencia: ajústalos a tu coche.
 """
 )
