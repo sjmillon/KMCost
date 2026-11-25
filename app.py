@@ -113,35 +113,35 @@ def selector_lugar(etiqueta, clave, ejemplo):
 
 
 def panel_vehiculo(prefijo):
-    """Selector de vehículo con consumos de referencia editables. Devuelve dict."""
-    modelos = list(VEHICULOS)
-    modelo = selectbox_filtrable(
-        "Modelo de vehículo", modelos, key=f"{prefijo}_modelo",
-        help="Consumos de referencia en uso real. Puedes editarlos.",
-        placeholder="Escribe el modelo (ej. Tesla, Seat, BMW…)",
+    """Pide solo los datos que el usuario conoce de su coche. Sin catálogo."""
+    tipo = st.selectbox(
+        "Tipo de vehículo",
+        ["combustion", "hev", "phev", "ev"],
+        format_func=lambda x: TIPOS_LABEL[x],
+        key=f"{prefijo}_tipo",
+        help="Combustión, híbrido, híbrido enchufable o eléctrico puro.",
     )
-    if not modelo:
-        return None
-    v = dict(VEHICULOS[modelo])
-    tipo = v["tipo"]
-    st.caption(f"Tipo: **{TIPOS_LABEL[tipo]}**")
-    k = f"{prefijo}_{modelo}"
+    v = {"tipo": tipo, "modelo": "Personalizado"}
+
     if tipo != "ev":
         combustibles = list(data.COMBUSTIBLES)
         c1, c2, c3 = st.columns(3)
-        v["combustible"] = c1.selectbox("Combustible", combustibles,
-                                        index=combustibles.index(v["combustible"]), key=f"{k}_comb")
-        v["consumo_l"] = c2.number_input("Consumo (L/100 km)", 1.0, 30.0, float(v["consumo_l"]), 0.1,
-                                         key=f"{k}_cl")
-        v["deposito"] = c3.number_input("Depósito (L)", 10.0, 150.0, float(v["deposito"]), 1.0,
-                                        key=f"{k}_dep")
+        v["combustible"] = c1.selectbox("Combustible", combustibles, key=f"{prefijo}_comb")
+        v["consumo_l"] = c2.number_input(
+            "Consumo medio (L/100 km)", 1.0, 30.0, 6.5, 0.1, key=f"{prefijo}_cl",
+            help="El que te marca el coche o el que sueles ver en tus viajes.",
+        )
+        v["deposito"] = c3.number_input(
+            "Depósito (L)", 10.0, 150.0, 50.0, 1.0, key=f"{prefijo}_dep"
+        )
     if tipo in ("ev", "phev"):
         c1, c2 = st.columns(2)
-        v["consumo_kwh"] = c1.number_input("Consumo eléctrico (kWh/100 km)", 5.0, 50.0,
-                                           float(v["consumo_kwh"]), 0.5, key=f"{k}_ckwh")
-        v["bateria"] = c2.number_input("Batería útil (kWh)", 3.0, 200.0, float(v["bateria"]), 0.5,
-                                       key=f"{k}_bat")
-    v["modelo"] = modelo
+        v["consumo_kwh"] = c1.number_input(
+            "Consumo eléctrico (kWh/100 km)", 5.0, 50.0, 17.0, 0.5, key=f"{prefijo}_ckwh"
+        )
+        v["bateria"] = c2.number_input(
+            "Batería útil (kWh)", 3.0, 200.0, 60.0, 0.5, key=f"{prefijo}_bat"
+        )
     return v
 
 
