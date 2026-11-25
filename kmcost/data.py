@@ -333,7 +333,7 @@ def _ruta_osrm(lon1, lat1, lon2, lat2):
                 ruta = data["routes"][0]
                 return {
                     "distancia_km": ruta["distance"] / 1000.0,
-                    "duracion_min": ruta["duration"] / 60.0,
+                    "duracion_min": (ruta["duration"] / 60.0) * 0.82,  # factor de corrección vs Google/Waze,
                     "coords": ruta["geometry"]["coordinates"],
                 }
         except Exception as exc:  # noqa: BLE001
