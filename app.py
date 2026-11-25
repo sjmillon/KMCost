@@ -471,6 +471,7 @@ def modo_viajar():
     m1, m2, m3 = st.columns(3)
     m1.metric("Distancia", f"{num(L, 0)} km")
     m2.metric("Duración estimada", f"{horas} h {minutos:02d} min")
+    st.caption("Tiempo ajustado a valores reales (OSRM corregido). Google Maps y Waze pueden variar ligeramente según el tráfico del momento.")
     m3.metric("Vehículo", veh["modelo"].split(" (")[0])
 
     # ---------- gasolineras
