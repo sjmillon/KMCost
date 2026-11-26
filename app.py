@@ -1,4 +1,4 @@
-"""KMCost: coste de tus desplazamientos y planificador de viajes con gasolineras y puntos de carga.
+"""NAVSIQ: coste de tus desplazamientos y planificador de viajes con gasolineras y puntos de carga.
 
 Fuentes públicas: MITECO (precios de carburantes), OSRM (rutas), Nominatim/Photon (direcciones),
 Red Eléctrica (PVPC), MITERD/DGT y OpenStreetMap (puntos de carga) y Yahoo Finance (Brent).
@@ -45,7 +45,7 @@ data, planner, _costs, _vehicles = _importar_kmcost()
 desglose_impuestos, euros, num = _costs.desglose_impuestos, _costs.euros, _costs.num
 TIPOS_LABEL, VEHICULOS = _vehicles.TIPOS_LABEL, _vehicles.VEHICULOS
 
-st.set_page_config(page_title="KMCost · Combustible, viajes y recarga", page_icon="⛽",
+st.set_page_config(page_title="NAVSIQ · Combustible, viajes y recarga", page_icon="⛽",
                    layout="wide", initial_sidebar_state="collapsed")
 
 st.markdown(
@@ -378,7 +378,7 @@ def obtener_cargadores(ruta, desvio_km):
 
 
 # ============================================================ cabecera y datos comunes
-st.title("⛽ KMCost")
+st.title("⛽ NAVSIQ")
 st.caption("Cuánto te cuesta conducir · precios oficiales en tiempo real · gasolineras y puntos de carga en la ruta")
 
 modo = st.radio("Modo", ["🧭 Viajar", "🏠 Casa-trabajo"], horizontal=True, label_visibility="collapsed",
@@ -722,7 +722,7 @@ def enviar_informe_email(destinatario, r):
         <li>Base energía/carburante: {num(e['base'], 2)} €</li>
         <li>{e['nombre_impuesto']}: {num(e['impuesto_esp'], 2)} €</li><li>IVA (21 %): {num(e['iva'], 2)} €</li></ul>
       <p style="font-size:12px;color:#777">Generado con
-      <a href="https://kmcost.streamlit.app/">kmcost.streamlit.app</a></p>
+      <a       <a href="https://navsiq.streamlit.app/">navsiq.streamlit.app</a></p>
     </body></html>"""
     try:
         msg = MIMEMultipart("alternative")
